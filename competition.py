@@ -3,107 +3,87 @@ from competition_utils import *
 
 #inital variables
 samples_path = 'DIS_lab_LoS/samples/'
-numb_users = 1
+numb_users = 4#corresponds to number of models
 size = int(252004 / numb_users) #size of user dataset
-
-#load antenna position and user position for one user
-ant_pos = np.load('DIS_lab_LoS/antenna_positions.npy')
-if numb_users == 1:
-    user_pos = np.load('DIS_lab_LoS/user_positions.npy')
+select_ant = False
 
 #create list of users
 users_list = [USER(i+1) for i in range(numb_users)]
 
 #load data
-#since there are memory problems, I load only 63000 samples
-size = 63000
-subcarry = 10#any number from [0, 99]
-for user in users_list: user.load_data(samples_path, size)
+size = 10000
+print("Loading data from ("+samples_path+") folder...")
+n = '000000'
+antennas = np.array([i for i in range(64)])#64 antennas in total
+antennas = antennas.reshape(numb_users, int(64 / numb_users))
+pref_ant = 0
+for i in range(len(user_pos)):
+    if select_ant:#it will assign sample to a closest stack of antennas
+        user_x = user_pos[i][0]
+        user_y = user_pos[i][1]
+        closest = 999999
+        
+        for j in range(len(ant_pos)):
+            ant_x = ant_pos[j][0]
+            ant_y = ant_pos[j][1]
+            distance = np.sqrt((np.abs(user_x - ant_x))**2 + (np.abs(user_y - ant_y))**2)
+            if distance < closest:
+                closest = distance
+                pref_ant = j
+        #for current user position prefered antenna stack is 
+        if len(users_list[np.where(antennas == pref_ant)[0][0]].x) < size:
+            tmp = np.load(samples_path+filename+n+'.npy')
+            users_list[np.where(antennas == pref_ant)[0][0]].x.append(np.array([tmp.real, tmp.imag]))
+    else:
+        if len(users_list[np.where(antennas == pref_ant)[0][0]].x)<size:
+            tmp = np.load(samples_path+filename+n+'.npy')
+            users_list[np.where(antennas == pref_ant)[0][0]].x.append(np.array([tmp.real, tmp.imag]))
+        else:
+            if pref_ant != 63:
+                pref_ant += 1
+    n = n[0:len(n) - len(str(i))] + str(i)
 
-#split data into train and test
-for user in users_list: user.split_data(subc = subcarry)
-
-#train users
-#the model will be assigned and trained
-ep = 20
-bs = 256
-enc_dimension = 60
-shuffle = True
+#reshape data
 for user in users_list:
-    user.train(ep, bs, shuffle, enc_dimension)
+    user.x = np.array(user.x).reshape(len(user.x), 2, 64, 100, 1)
 
-#check for overfitting
-plt.figure()
-plt.plot(range(len(users_list[0].t_hist.history["loss"])), users_list[0].t_hist.history["loss"], label = 'training loss')
-plt.plot(range(len(users_list[0].t_hist.history["val_loss"])), users_list[0].t_hist.history["val_loss"], label = 'validation loss')
-plt.xlabel("epochs")
-plt.ylabel("mse")
-plt.legend()
-
+#train and predict
 for user in users_list:
-    user.dec = user.model.predict(user.test_data)
+    seed(user.number)
+    tensorflow.random.set_seed(user.number)
+    print('Training user', user.number)
+    user.assign_cnn(act_function='tanh')
+    user.model.fit(user.x[0:-1000], user.x[0:-1000], epochs = 10, batch_size = 64)
+    print('Decoding...')
+    user.dec = user.model.predict(user.x[-1000:])
 
-plot_two_CSI_curves(users_list[0].test_data, users_list[0].dec, ant = 0, t = 'CSI for 1 subcarrier') 
-
-
-
-
-
-# c = np.where((user_pos[1:,0] - user_pos[0:-1,0]) < 5)[0]
-# d = np.where(np.abs(user_pos[1:,1] - user_pos[0:-1,1]) != 5)[0]
-
+#evaluate
+for user in users_list:
+    seed(user.number)
+    tensorflow.random.set_seed(user.number)
+    evals = user.model.evaluate(user.x[-1000:], user.x[-1000:])
     
+    with open("competition/evaluation_record.txt", 'a') as f:
+        now = datetime.now()
+        f.write(str(now.strftime("%d/%m/%Y %H:%M:%S"))  + ' evalution of user '+str(user.number)+' = '+str(evals) + '\n')
 
 
 
 
-# x_train = []
-# x_test = []
-# for i in range(size):
-#     if i < size - int(size / 5):
-#         x_train.append(pre_process(np.load(samples_path+filename+n+'.npy')))
-#     else:
-#         x_test.append(pre_process(np.load(samples_path+filename+n+'.npy')))
-#     n = n[0:len(n) - len(str(i))] + str(i)
-
-# x_train_2 = []
-# x_test_2 = []
-    
-# for i in range(size):
-#     if i < size - int(size / 5):
-#         x_train_2.append(pre_process(np.load(samples_path+filename+n+'.npy')))
-#     else:
-#         x_test_2.append(pre_process(np.load(samples_path+filename+n+'.npy')))
-#     n = n[0:len(n) - len(str(i))] + str(i)
-    
 
 
-# x_train = np.array(x_train)
-# x_test = np.array(x_test)
 
 
-# model = Sequential()
-# model.add(keras.Input(shape=(6400, )))
-# model.add(layers.Dense(2000, activation = 'relu', name = 'h1'))
-# model.add(layers.Dense(6400, activation = 'sigmoid', name = 'out'))
-# model.compile(optimizer = 'adam', loss = 'mse', metrics = ['accuracy'])
-
-# hist = model.fit(x_train, x_train, validation_split = 0.2, epochs = 10, batch_size = 32)
-
-# plt.figure(1)
-# plt.title('Training history')
-# plt.plot(range(len(hist.history['loss'])), hist.history['loss'], label = 'training loss')
-# plt.plot(range(len(hist.history['val_loss'])), hist.history['val_loss'], label = 'validation loss')
-# plt.legend()
 
 
-# decs = model.predict(x_test)
 
-# decs = decs.reshape(decs.shape[0], 64, 100)
-# x_test = x_test.reshape(x_test.shape[0], 64, 100)
 
-# user = 10
-# ant = 0
-# plot_two_CSI_curves(x_test[user][ant], decs[user][ant], 
-#                 t = 'CSI signal\nantenna position: x = ' + str(ant_pos[ant][0]) + ', y = '+ str(ant_pos[ant][1]) + '\nuser position: x = ' + str(user_pos[user][0]) + ', y = ' + str(user_pos[user][1]), 
-#                 labelx = 'x_mean = '+str(np.mean(x_test[user][ant]).real), labely = 'y_mean = ' + str(np.mean(decs[user][ant])))
+
+
+
+
+
+
+
+
+
